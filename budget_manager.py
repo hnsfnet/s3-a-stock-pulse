@@ -38,10 +38,15 @@ class BudgetManager:
         monthly_summary = self.ds.get_monthly_summary(year_month)
         total_expense = monthly_summary['total_expense']
 
+        if not isinstance(total_expense, (int, float)) or total_expense < 0:
+            total_expense = 0.0
+        if total_budget < 0:
+            total_budget = 0.0
+
         if total_budget == 0:
             ratio = 0
         else:
-            ratio = total_expense / total_budget
+            ratio = min(total_expense / total_budget, 10.0)
 
         status = 'normal'
         if ratio >= self.DANGER_THRESHOLD:
@@ -84,22 +89,30 @@ class BudgetManager:
 
         expense_map = {}
         for exp in expense_data:
-            expense_map[exp['id']] = exp['total']
+            expense_map[exp['id']] = float(exp['total']) if exp['total'] else 0.0
 
         result = []
         for parent in expense_categories:
             pid = parent['id']
             parent_budget = budget_map.get(pid)
-            parent_budget_amount = parent_budget['amount'] if parent_budget else 0
-            parent_direct_spent = expense_map.get(pid, 0)
+            parent_budget_amount = float(parent_budget['amount']) if parent_budget and parent_budget['amount'] else 0.0
+            if parent_budget_amount < 0:
+                parent_budget_amount = 0.0
+            parent_direct_spent = float(expense_map.get(pid, 0.0))
+            if parent_direct_spent < 0:
+                parent_direct_spent = 0.0
 
             children_status = []
-            children_total_spent = 0
+            children_total_spent = 0.0
             for sub in all_subcategories.get(pid, []):
                 sid = sub['id']
                 sub_budget = budget_map.get(sid)
-                sub_budget_amount = sub_budget['amount'] if sub_budget else 0
-                sub_spent = expense_map.get(sid, 0)
+                sub_budget_amount = float(sub_budget['amount']) if sub_budget and sub_budget['amount'] else 0.0
+                if sub_budget_amount < 0:
+                    sub_budget_amount = 0.0
+                sub_spent = float(expense_map.get(sid, 0.0))
+                if sub_spent < 0:
+                    sub_spent = 0.0
                 children_total_spent += sub_spent
 
                 sub_ratio = sub_spent / sub_budget_amount if sub_budget_amount > 0 else 0

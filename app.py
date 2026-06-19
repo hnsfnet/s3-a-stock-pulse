@@ -1,5 +1,5 @@
 import customtkinter as ctk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from datetime import datetime, date, timedelta
 from datastore import DataStore
 from ledger import Ledger
@@ -595,8 +595,29 @@ class TransactionsPage(ctk.CTkFrame):
         TransactionDialog(self, self.ledger, txn_id, self._on_transaction_saved)
 
     def _on_transaction_saved(self):
+        self.ledger.refresh_data()
+        self._reset_filters()
+        self._refresh_category_combo()
+        self._refresh_account_combo()
         self._refresh_list()
         self.refresh_callback()
+
+    def _refresh_category_combo(self):
+        categories = self.ledger.get_categories()
+        current_val = self.category_var.get()
+        cat_values = ['全部分类'] + [f"{c['icon']} {c['name']}" for c in categories]
+        self.category_combo.configure(values=cat_values)
+        if current_val not in cat_values:
+            self.category_var.set('全部分类')
+        else:
+            self.category_var.set(current_val)
+
+    def _refresh_account_combo(self):
+        accounts = self.ledger.get_accounts()
+        current_val = self.account_var.get()
+        acc_values = ['全部账户'] + [a['name'] for a in accounts]
+        if current_val not in acc_values:
+            self.account_var.set('全部账户')
 
 
 class TransactionDialog(ctk.CTkToplevel):
@@ -1281,9 +1302,56 @@ class ReportPage(ctk.CTkScrollableFrame):
         )
         title.pack(side='left')
 
+        export_summary_btn = ctk.CTkButton(
+            header, text='📤 导出分类汇总',
+            width=130, height=36,
+            command=self._export_category_summary
+        )
+        export_summary_btn.pack(side='right', padx=(10, 0))
+
+        export_txns_btn = ctk.CTkButton(
+            header, text='📤 导出月度明细',
+            width=130, height=36,
+            fg_color='#45B7D1',
+            command=self._export_monthly_transactions
+        )
+        export_txns_btn.pack(side='right')
+
         month_label = ctk.CTkLabel(header, text=f'当前月份: {self.current_month}',
                                     font=ctk.CTkFont(size=14), text_color='gray')
-        month_label.pack(side='right')
+        month_label.pack(side='right', padx=(0, 20))
+
+    def _export_monthly_transactions(self):
+        default_name = f'{self.current_month}_交易明细.csv'
+        file_path = filedialog.asksaveasfilename(
+            title='导出月度交易明细',
+            defaultextension='.csv',
+            initialfile=default_name,
+            filetypes=[('CSV 文件', '*.csv'), ('所有文件', '*.*')]
+        )
+        if not file_path:
+            return
+        try:
+            self.report_generator.export_monthly_csv(self.current_month, file_path)
+            messagebox.showinfo('导出成功', f'月度交易明细已导出到:\n{file_path}')
+        except Exception as e:
+            messagebox.showerror('导出失败', f'导出时出错: {e}')
+
+    def _export_category_summary(self):
+        default_name = f'{self.current_month}_分类汇总.csv'
+        file_path = filedialog.asksaveasfilename(
+            title='导出分类汇总',
+            defaultextension='.csv',
+            initialfile=default_name,
+            filetypes=[('CSV 文件', '*.csv'), ('所有文件', '*.*')]
+        )
+        if not file_path:
+            return
+        try:
+            self.report_generator.export_category_summary_csv(self.current_month, file_path)
+            messagebox.showinfo('导出成功', f'分类汇总已导出到:\n{file_path}')
+        except Exception as e:
+            messagebox.showerror('导出失败', f'导出时出错: {e}')
 
     def _create_bar_chart(self):
         card = ctk.CTkFrame(self, corner_radius=10, fg_color='white')

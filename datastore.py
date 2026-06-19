@@ -4,6 +4,39 @@ from datetime import datetime, date, timedelta
 
 
 class DataStore:
+    @staticmethod
+    def normalize_date(date_val):
+        if date_val is None:
+            return None
+        if isinstance(date_val, datetime):
+            return date_val.strftime('%Y-%m-%d')
+        if isinstance(date_val, date):
+            return date_val.strftime('%Y-%m-%d')
+        if isinstance(date_val, str):
+            s = date_val.strip()
+            if len(s) >= 10 and s[4] == '-' and s[7] == '-':
+                return s[:10]
+            try:
+                dt = datetime.strptime(s, '%Y-%m-%d')
+                return dt.strftime('%Y-%m-%d')
+            except ValueError:
+                try:
+                    dt = datetime.fromisoformat(s.replace('Z', '+00:00'))
+                    return dt.strftime('%Y-%m-%d')
+                except (ValueError, TypeError):
+                    return date.today().strftime('%Y-%m-%d')
+        return date.today().strftime('%Y-%m-%d')
+
+    @staticmethod
+    def normalize_year_month(ym):
+        if ym is None:
+            return None
+        if isinstance(ym, str):
+            s = ym.strip()
+            if len(s) >= 7 and s[4] == '-':
+                return s[:7]
+        return date.today().strftime('%Y-%m')
+
     def __init__(self, db_path=None):
         if db_path is None:
             db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ledger.db')
@@ -232,6 +265,7 @@ class DataStore:
 
     def add_transaction(self, date_str, amount, type_, category_id, account_id,
                         note='', to_account_id=None, recurring_rule_id=None):
+        date_str = DataStore.normalize_date(date_str)
         cursor = self.conn.cursor()
         cursor.execute(
             '''INSERT INTO transactions 
@@ -243,6 +277,7 @@ class DataStore:
         return cursor.lastrowid
 
     def add_transfer(self, date_str, amount, from_account_id, to_account_id, note=''):
+        date_str = DataStore.normalize_date(date_str)
         cursor = self.conn.cursor()
         cursor.execute(
             '''INSERT INTO transactions
@@ -255,6 +290,7 @@ class DataStore:
 
     def update_transaction(self, txn_id, date_str, amount, type_, category_id, account_id,
                            note='', to_account_id=None):
+        date_str = DataStore.normalize_date(date_str)
         cursor = self.conn.cursor()
         cursor.execute(
             '''UPDATE transactions 
@@ -288,6 +324,8 @@ class DataStore:
     def get_transactions(self, start_date=None, end_date=None, type_=None,
                          category_id=None, account_id=None, keyword=None,
                          limit=None, offset=None, order_by='date DESC'):
+        start_date = DataStore.normalize_date(start_date) if start_date else None
+        end_date = DataStore.normalize_date(end_date) if end_date else None
         cursor = self.conn.cursor()
         query = '''
             SELECT t.*, c.name as category_name, c.icon as category_icon,
@@ -467,6 +505,7 @@ class DataStore:
     # ==================== Summary / Reports ====================
 
     def get_monthly_summary(self, year_month):
+        year_month = DataStore.normalize_year_month(year_month)
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT
@@ -483,6 +522,7 @@ class DataStore:
         }
 
     def get_category_expense_summary(self, year_month):
+        year_month = DataStore.normalize_year_month(year_month)
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT c.id, c.name, c.icon, c.parent_id,
@@ -496,6 +536,7 @@ class DataStore:
         return [dict(row) for row in cursor.fetchall()]
 
     def get_category_expense_summary_with_parent(self, year_month):
+        year_month = DataStore.normalize_year_month(year_month)
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT c.id, c.name, c.icon, c.parent_id,
@@ -511,6 +552,7 @@ class DataStore:
         return [dict(row) for row in cursor.fetchall()]
 
     def get_category_income_summary(self, year_month):
+        year_month = DataStore.normalize_year_month(year_month)
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT c.id, c.name, c.icon, c.parent_id,
@@ -557,6 +599,7 @@ class DataStore:
     # ==================== Budget ====================
 
     def set_budget(self, year_month, amount, category_id=None):
+        year_month = DataStore.normalize_year_month(year_month)
         cursor = self.conn.cursor()
         budget_type = 'category' if category_id else 'total'
         cursor.execute('''
@@ -569,6 +612,7 @@ class DataStore:
         return cursor.lastrowid
 
     def get_budgets(self, year_month):
+        year_month = DataStore.normalize_year_month(year_month)
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT b.*, c.name as category_name, c.icon as category_icon, c.parent_id
@@ -580,6 +624,7 @@ class DataStore:
         return [dict(row) for row in cursor.fetchall()]
 
     def get_budget(self, year_month, category_id=None):
+        year_month = DataStore.normalize_year_month(year_month)
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT b.*, c.name as category_name
@@ -618,8 +663,8 @@ class DataStore:
     def add_recurring_rule(self, name, frequency, interval_val, type_, amount,
                            category_id, account_id, note='', to_account_id=None,
                            start_date=None, end_date=None):
-        if start_date is None:
-            start_date = date.today().strftime('%Y-%m-%d')
+        start_date = DataStore.normalize_date(start_date) if start_date else date.today().strftime('%Y-%m-%d')
+        end_date = DataStore.normalize_date(end_date) if end_date else None
         cursor = self.conn.cursor()
         cursor.execute(
             '''INSERT INTO recurring_rules
@@ -669,7 +714,8 @@ class DataStore:
         fields = []
         params = []
         for col, val in [('name', name), ('frequency', frequency), ('interval_val', interval_val),
-                         ('amount', amount), ('note', note), ('end_date', end_date),
+                         ('amount', amount), ('note', note),
+                         ('end_date', DataStore.normalize_date(end_date) if end_date is not None else None),
                          ('active', active)]:
             if val is not None:
                 fields.append(f'{col} = ?')
@@ -682,6 +728,7 @@ class DataStore:
         return cursor.rowcount > 0
 
     def update_recurring_next_date(self, rule_id, next_date):
+        next_date = DataStore.normalize_date(next_date)
         cursor = self.conn.cursor()
         cursor.execute('UPDATE recurring_rules SET next_date=? WHERE id=?', (next_date, rule_id))
         self.conn.commit()
@@ -700,6 +747,7 @@ class DataStore:
     def get_due_recurring_rules(self, today_str=None):
         if today_str is None:
             today_str = date.today().strftime('%Y-%m-%d')
+        today_str = DataStore.normalize_date(today_str)
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT * FROM recurring_rules
@@ -710,6 +758,7 @@ class DataStore:
 
     @staticmethod
     def calculate_next_date(current_date_str, frequency, interval_val):
+        current_date_str = DataStore.normalize_date(current_date_str)
         current = datetime.strptime(current_date_str, '%Y-%m-%d').date()
         if frequency == 'daily':
             return current + timedelta(days=interval_val)

@@ -104,6 +104,13 @@ class Ledger:
     def get_monthly_summary(self, year_month):
         return self.ds.get_monthly_summary(year_month)
 
+    def refresh_data(self):
+        try:
+            self.ds.conn.commit()
+        except Exception:
+            pass
+        return True
+
     def get_category_expense_summary(self, year_month):
         return self.ds.get_category_expense_summary(year_month)
 

@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from datastore import DataStore
+import csv
+import os
 
 
 plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'Arial Unicode MS']
@@ -223,3 +225,69 @@ class ReportGenerator:
             'income_data': income_data,
             'expense_data': expense_result
         }
+
+    def export_monthly_csv(self, year_month, output_path):
+        year_month = DataStore.normalize_year_month(year_month)
+        transactions = self.ds.get_transactions()
+        month_txns = [t for t in transactions
+                      if t.get('date', '').startswith(year_month)]
+
+        with open(output_path, 'w', encoding='utf-8-sig', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['日期', '类型', '分类', '子分类', '账户', '金额', '备注'])
+
+            for t in month_txns:
+                if t['type'] == 'transfer':
+                    type_str = '转账'
+                    cat_str = ''
+                    sub_cat_str = ''
+                    acc_str = f"{t.get('account_name', '')}→{t.get('to_account_name', '')}"
+                else:
+                    type_str = '收入' if t['type'] == 'income' else '支出'
+                    cat_icon = t.get('category_icon', '')
+                    cat_name = t.get('category_name', '')
+                    cat_str = f'{cat_icon} {cat_name}' if cat_name else '未分类'
+                    sub_cat_str = ''
+                    acc_str = t.get('account_name', '')
+
+                writer.writerow([
+                    t.get('date', ''),
+                    type_str,
+                    cat_str,
+                    sub_cat_str,
+                    acc_str,
+                    f"{t.get('amount', 0):.2f}",
+                    t.get('note', '')
+                ])
+
+        return os.path.abspath(output_path)
+
+    def export_category_summary_csv(self, year_month, output_path):
+        year_month = DataStore.normalize_year_month(year_month)
+        summary = self.create_category_summary_table_data(year_month)
+
+        with open(output_path, 'w', encoding='utf-8-sig', newline='') as f:
+            writer = csv.writer(f)
+
+            writer.writerow([f'{year_month} 分类收支汇总'])
+            writer.writerow([])
+
+            writer.writerow(['收入分类汇总'])
+            writer.writerow(['分类', '金额', '占比(%)'])
+            for item in summary['income_data']:
+                writer.writerow([item['category'], f"{item['amount']:.2f}", f"{item['percentage']:.2f}"])
+            writer.writerow(['收入合计', f"{summary['total_income']:.2f}", '100.00'])
+            writer.writerow([])
+
+            writer.writerow(['支出分类汇总'])
+            writer.writerow(['分类', '金额', '占比(%)'])
+            for item in summary['expense_data']:
+                writer.writerow([item['category'], f"{item['amount']:.2f}", f"{item['percentage']:.2f}"])
+                for sub in item.get('subs', []):
+                    writer.writerow([f"  └ {sub['icon']} {sub['name']}", f"{sub['amount']:.2f}", ''])
+            writer.writerow(['支出合计', f"{summary['total_expense']:.2f}", '100.00'])
+            writer.writerow([])
+
+            writer.writerow(['本月结余', f"{summary['balance']:.2f}"])
+
+        return os.path.abspath(output_path)
