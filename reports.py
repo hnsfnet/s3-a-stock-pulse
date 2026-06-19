@@ -6,10 +6,15 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import csv
 import os
 
+from config import config
 from database import DatabaseConnection
+from logger import get_logger
 from repositories import TransactionRepository, AccountRepository, CategoryRepository
 
-plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'Arial Unicode MS']
+logger = get_logger('reports')
+
+font_families = config.get('chart.font_families', ['Microsoft YaHei', 'SimHei', 'Arial Unicode MS'])
+plt.rcParams['font.sans-serif'] = font_families
 plt.rcParams['axes.unicode_minus'] = False
 
 

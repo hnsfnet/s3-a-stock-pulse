@@ -1,9 +1,16 @@
 from datetime import date
+
 from database import DatabaseConnection, SchemaMigrator
+from logger import get_logger, log_transaction, log_recurring_generated
 from repositories import (
-    TransactionRepository, CategoryRepository, AccountRepository,
-    BudgetRepository, RecurringRuleRepository
+    AccountRepository,
+    BudgetRepository,
+    CategoryRepository,
+    RecurringRuleRepository,
+    TransactionRepository,
 )
+
+logger = get_logger('ledger')
 
 
 class Ledger:
@@ -17,6 +24,7 @@ class Ledger:
             self._acc_repo = AccountRepository(self.db)
             self._budget_repo = BudgetRepository(self.db)
             self._rr_repo = RecurringRuleRepository(self.db)
+            logger.info("Ledger initialized with new database connection")
         else:
             ds = db_path_or_ds
             self.db = ds.db
@@ -26,6 +34,7 @@ class Ledger:
             self._acc_repo = ds._acc
             self._budget_repo = ds._budget
             self._rr_repo = ds._rr
+            logger.info("Ledger initialized from existing DataStore")
 
     def get_current_month_str(self):
         return date.today().strftime('%Y-%m')
@@ -37,22 +46,35 @@ class Ledger:
 
     def add_transaction(self, date_str, amount, type_, category_id, account_id,
                         note='', to_account_id=None, recurring_rule_id=None):
-        return self._tx_repo.add(
+        txn_id = self._tx_repo.add(
             date_str, amount, type_, category_id, account_id, note,
             to_account_id=to_account_id, recurring_rule_id=recurring_rule_id
         )
+        log_transaction(logger, 'added', txn_id, date=date_str, amount=amount, type=type_,
+                        category_id=category_id, account_id=account_id)
+        return txn_id
 
     def add_transfer(self, date_str, amount, from_account_id, to_account_id, note=''):
-        return self._tx_repo.add_transfer(date_str, amount, from_account_id, to_account_id, note)
+        txn_id = self._tx_repo.add_transfer(date_str, amount, from_account_id, to_account_id, note)
+        log_transaction(logger, 'transfer added', txn_id, date=date_str, amount=amount,
+                        from_account_id=from_account_id, to_account_id=to_account_id)
+        return txn_id
 
     def update_transaction(self, txn_id, date_str, amount, type_, category_id, account_id,
                            note='', to_account_id=None):
-        return self._tx_repo.update(
+        result = self._tx_repo.update(
             txn_id, date_str, amount, type_, category_id, account_id, note, to_account_id
         )
+        if result:
+            log_transaction(logger, 'updated', txn_id, date=date_str, amount=amount, type=type_,
+                            category_id=category_id, account_id=account_id)
+        return result
 
     def delete_transaction(self, txn_id):
-        return self._tx_repo.delete(txn_id)
+        result = self._tx_repo.delete(txn_id)
+        if result:
+            log_transaction(logger, 'deleted', txn_id)
+        return result
 
     def get_transaction(self, txn_id):
         return self._tx_repo.get(txn_id)
@@ -170,29 +192,34 @@ class Ledger:
     def process_due_recurring(self):
         today_str = date.today().strftime('%Y-%m-%d')
         due_rules = self.get_due_recurring_rules(today_str)
+        logger.info(f"Processing due recurring rules: {len(due_rules)} rules due today ({today_str})")
         generated = 0
         for rule in due_rules:
             if rule['type'] == 'transfer':
-                self.add_transfer(
+                txn_id = self.add_transfer(
                     rule['next_date'], rule['amount'],
                     rule['account_id'], rule['to_account_id'], rule['note']
                 )
             else:
-                self.add_transaction(
+                txn_id = self.add_transaction(
                     rule['next_date'], rule['amount'], rule['type'],
                     rule['category_id'], rule['account_id'], rule['note'],
                     recurring_rule_id=rule['id']
                 )
+            log_recurring_generated(logger, rule['id'], rule['name'], txn_id)
             next_date = RecurringRuleRepository.calculate_next_date(
                 rule['next_date'], rule['frequency'], rule['interval_val']
             )
             if rule['end_date'] and next_date.strftime('%Y-%m-%d') > rule['end_date']:
                 self.deactivate_recurring_rule(rule['id'])
+                logger.info(f"Recurring rule {rule['id']} ({rule['name']}) deactivated (end_date reached)")
             else:
                 self.update_recurring_next_date(
                     rule['id'], next_date.strftime('%Y-%m-%d')
                 )
             generated += 1
+        if generated > 0:
+            logger.info(f"Completed processing recurring rules: {generated} transactions generated")
         return generated
 
     def refresh_data(self):

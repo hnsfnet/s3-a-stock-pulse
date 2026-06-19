@@ -2,12 +2,21 @@ import sqlite3
 import os
 from datetime import datetime, date
 
+from logger import get_logger, log_sql
+
+logger = get_logger('database')
+
 
 class DatabaseConnection:
     def __init__(self, db_path=None):
         if db_path is None:
-            db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ledger.db')
+            from config import config
+            db_path = str(config.get_db_path())
         self.db_path = db_path
+        db_dir = os.path.dirname(os.path.abspath(self.db_path))
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+        logger.info(f"Connecting to database: {self.db_path}")
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute('PRAGMA foreign_keys = ON')
@@ -16,15 +25,19 @@ class DatabaseConnection:
         return self.conn.cursor()
 
     def commit(self):
+        log_sql(logger, "COMMIT")
         self.conn.commit()
 
     def rollback(self):
+        log_sql(logger, "ROLLBACK")
         self.conn.rollback()
 
     def close(self):
+        logger.info(f"Closing database connection: {self.db_path}")
         self.conn.close()
 
     def executescript(self, script):
+        log_sql(logger, script)
         self.conn.executescript(script)
         self.conn.commit()
 
@@ -67,14 +80,21 @@ class SchemaMigrator:
 
     def __init__(self, db):
         self.db = db
+        self.logger = get_logger('migrator')
 
     def initialize(self):
+        self.logger.info("Starting schema initialization")
         self._ensure_version_table()
         self._init_base_tables()
         current = self._get_version()
+        self.logger.info(f"Current schema version: {current}, target: {self.CURRENT_VERSION}")
         if current < self.CURRENT_VERSION:
+            self.logger.info(f"Migrating from version {current} to {self.CURRENT_VERSION}")
             self._migrate_from(current)
             self._set_version(self.CURRENT_VERSION)
+            self.logger.info("Schema migration completed successfully")
+        else:
+            self.logger.info("Schema is up to date")
         self._init_default_categories()
         self._init_default_subcategories()
         self._init_default_accounts()
@@ -179,24 +199,31 @@ class SchemaMigrator:
     def _migrate_from(self, from_version):
         cursor = self.db.cursor()
         if from_version < 1:
+            self.logger.info("Migrating to version 1: adding parent_id to categories")
             try:
                 cursor.execute('ALTER TABLE categories ADD COLUMN parent_id INTEGER')
                 self.db.commit()
-            except sqlite3.OperationalError:
-                pass
+                self.logger.info("Version 1 migration completed")
+            except sqlite3.OperationalError as e:
+                self.logger.warning(f"Version 1 migration skipped (column may exist): {e}")
         if from_version < 2:
+            self.logger.info("Migrating to version 2: adding to_account_id to transactions")
             try:
                 cursor.execute('ALTER TABLE transactions ADD COLUMN to_account_id INTEGER')
                 self.db.commit()
-            except sqlite3.OperationalError:
-                pass
+                self.logger.info("Version 2 migration completed")
+            except sqlite3.OperationalError as e:
+                self.logger.warning(f"Version 2 migration skipped (column may exist): {e}")
         if from_version < 3:
+            self.logger.info("Migrating to version 3: adding recurring_rule_id to transactions")
             try:
                 cursor.execute('ALTER TABLE transactions ADD COLUMN recurring_rule_id INTEGER')
                 self.db.commit()
-            except sqlite3.OperationalError:
-                pass
+                self.logger.info("Version 3 migration completed")
+            except sqlite3.OperationalError as e:
+                self.logger.warning(f"Version 3 migration skipped (column may exist): {e}")
         if from_version < 4:
+            self.logger.info("Migrating to version 4: adding 'transfer' type to transactions")
             cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='transactions'")
             result = cursor.fetchone()
             if result and 'transfer' not in (result[0] or ''):

@@ -1,30 +1,38 @@
 from datetime import date
+
+from config import config
 from database import DatabaseConnection
-from repositories import TransactionRepository, BudgetRepository, CategoryRepository
+from logger import get_logger, log_budget_warning
+from repositories import BudgetRepository, CategoryRepository, TransactionRepository
+
+logger = get_logger('budget')
 
 
 class BudgetManager:
-    WARNING_THRESHOLD = 0.8
-    DANGER_THRESHOLD = 1.0
-
     def __init__(self, ledger_or_ds=None, db=None):
+        self.WARNING_THRESHOLD = config.get('budget.warning_threshold', 0.8)
+        self.DANGER_THRESHOLD = config.get('budget.danger_threshold', 1.0)
+
         if ledger_or_ds is not None and hasattr(ledger_or_ds, '_tx_repo'):
             ledger = ledger_or_ds
             self._tx_repo = ledger._tx_repo
             self._budget_repo = ledger._budget_repo
             self._cat_repo = ledger._cat_repo
             self.ds = None
+            logger.info("BudgetManager initialized from Ledger")
         elif ledger_or_ds is not None and hasattr(ledger_or_ds, '_tx'):
             ds = ledger_or_ds
             self._tx_repo = ds._tx
             self._budget_repo = ds._budget
             self._cat_repo = ds._cat
             self.ds = _DSCompatAdapter(self._tx_repo, self._budget_repo, self._cat_repo)
+            logger.info("BudgetManager initialized from DataStore")
         else:
             self._tx_repo = TransactionRepository(db)
             self._budget_repo = BudgetRepository(db)
             self._cat_repo = CategoryRepository(db)
             self.ds = _DSCompatAdapter(self._tx_repo, self._budget_repo, self._cat_repo)
+            logger.info("BudgetManager initialized from raw database connection")
 
     def get_current_month_str(self):
         return date.today().strftime('%Y-%m')
@@ -182,6 +190,8 @@ class BudgetManager:
             pct = total_status['ratio'] * 100
             msg = f'总预算已使用 {pct:.1f}%，剩余 ¥{total_status["remaining"]:.2f}'
             warnings.append({'type': total_status['status'], 'message': msg})
+            log_budget_warning(logger, '总预算', total_status['spent'],
+                               total_status['budget'], total_status['ratio'])
 
         tree = self.get_category_budget_status_tree(year_month)
         for parent in tree:
@@ -189,12 +199,19 @@ class BudgetManager:
                 pct = parent['ratio'] * 100
                 msg = f'{parent["category_icon"]} {parent["category_name"]}预算已使用 {pct:.1f}%'
                 warnings.append({'type': parent['status'], 'message': msg})
+                log_budget_warning(logger, parent["category_name"], parent['spent'],
+                                   parent['budget'], parent['ratio'])
             for child in parent.get('children', []):
                 if child['status'] in ('warning', 'danger') and child['budget'] > 0:
                     pct = child['ratio'] * 100
+                    category_full_name = f'{parent["category_name"]} > {child["category_name"]}'
                     msg = f'{parent["category_icon"]} {parent["category_name"]} > {child["category_icon"]} {child["category_name"]}预算已使用 {pct:.1f}%'
                     warnings.append({'type': child['status'], 'message': msg})
+                    log_budget_warning(logger, category_full_name, child['spent'],
+                                       child['budget'], child['ratio'])
 
+        if warnings:
+            logger.info(f"Budget check for {year_month}: {len(warnings)} warnings found")
         return warnings
 
 

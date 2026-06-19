@@ -1,13 +1,18 @@
 import customtkinter as ctk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime, date, timedelta
+
+from config import config
 from datastore import DataStore
 from ledger import Ledger
 from budget_manager import BudgetManager
 from report_generator import ReportGenerator
+from logger import get_logger
 
-ctk.set_appearance_mode('light')
-ctk.set_default_color_theme('blue')
+logger = get_logger('app')
+
+ctk.set_appearance_mode(config.get('app.theme', 'light'))
+ctk.set_default_color_theme(config.get('app.color_theme', 'blue'))
 
 ACCOUNT_TYPE_LABELS = {
     'cash': '现金', 'bank': '银行卡', 'credit': '信用卡',
@@ -102,17 +107,23 @@ class App(ctk.CTk):
 
     def __init__(self):
         super().__init__()
-        self.title('个人记账本')
-        self.geometry('1000x700')
+        app_name = config.get('app.name', 'StockPulse 记账')
+        self.title(app_name)
+        window_size = config.get('app.window_size', [1000, 700])
+        self.geometry(f'{window_size[0]}x{window_size[1]}')
         self.minsize(900, 600)
+
+        logger.info(f"Starting {app_name}...")
 
         self.ds = DataStore()
         self.ledger = Ledger(self.ds)
         self.budget_manager = BudgetManager(self.ds)
         self.report_generator = ReportGenerator(self.ds)
+        logger.info("Core modules initialized")
 
         generated = self.ledger.process_due_recurring()
         if generated > 0:
+            logger.info(f"Auto-generated {generated} recurring transactions")
             messagebox.showinfo('周期记账', f'已自动生成 {generated} 笔到期的周期性交易记录。')
 
         self.current_page = 'overview'
@@ -138,6 +149,7 @@ class App(ctk.CTk):
         self._create_sidebar()
         self._create_main_area()
         self._show_page('overview')
+        logger.info(f"{app_name} started successfully")
 
     def _create_sidebar(self):
         self.sidebar = ctk.CTkFrame(self, width=180, corner_radius=0)
