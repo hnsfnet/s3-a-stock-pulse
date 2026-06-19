@@ -38,7 +38,68 @@ def _find_category_by_display(categories, display_str):
     return None
 
 
+class Page:
+    def __init__(self, master=None, **kwargs):
+        self._master = master
+        self._kwargs = kwargs
+        self.ledger = kwargs.get('ledger')
+        self.budget_manager = kwargs.get('budget_manager')
+        self.report_generator = kwargs.get('report_generator')
+        self.refresh_callback = kwargs.get('refresh_callback')
+
+    def build(self):
+        raise NotImplementedError
+
+    def refresh(self):
+        pass
+
+    def on_show(self):
+        self.refresh()
+
+
+class PageRouter:
+    def __init__(self):
+        self._pages = {}
+        self._builders = {}
+
+    def register(self, key, page_class, **static_kwargs):
+        self._builders[key] = (page_class, static_kwargs)
+
+    def show(self, key, master, **runtime_kwargs):
+        for w in master.winfo_children():
+            w.destroy()
+        page_cls, static_kw = self._builders[key]
+        merged = {**static_kw, **runtime_kwargs}
+        page = page_cls(master, **merged)
+        self._pages[key] = page
+        if hasattr(page, 'build') and callable(page.build):
+            try:
+                page.build()
+            except Exception:
+                pass
+        if hasattr(page, 'on_show') and callable(page.on_show):
+            try:
+                page.on_show()
+            except Exception:
+                pass
+        return page
+
+    def refresh_all(self, key, master, **runtime_kwargs):
+        if key in self._pages:
+            del self._pages[key]
+        return self.show(key, master, **runtime_kwargs)
+
+
 class App(ctk.CTk):
+    PAGE_REGISTRY = [
+        ('overview', '📊 概览'),
+        ('transactions', '📝 交易明细'),
+        ('accounts', '💳 账户管理'),
+        ('budget', '🎯 预算管理'),
+        ('recurring', '🔁 周期记账'),
+        ('report', '📈 报表统计'),
+    ]
+
     def __init__(self):
         super().__init__()
         self.title('个人记账本')
@@ -57,9 +118,26 @@ class App(ctk.CTk):
         self.current_page = 'overview'
         self.current_month = self.ledger.get_current_month_str()
 
+        self._buttons = {}
+        self.router = PageRouter()
+        self.router.register('overview', OverviewPage,
+                             ledger=self.ledger, budget_manager=self.budget_manager,
+                             report_generator=self.report_generator)
+        self.router.register('transactions', TransactionsPage,
+                             ledger=self.ledger, refresh_callback=self._refresh_all)
+        self.router.register('accounts', AccountsPage,
+                             ledger=self.ledger, refresh_callback=self._refresh_all)
+        self.router.register('budget', BudgetPage,
+                             budget_manager=self.budget_manager, ledger=self.ledger,
+                             refresh_callback=self._refresh_all)
+        self.router.register('recurring', RecurringRulesPage,
+                             ledger=self.ledger, refresh_callback=self._refresh_all)
+        self.router.register('report', ReportPage,
+                             report_generator=self.report_generator)
+
         self._create_sidebar()
         self._create_main_area()
-        self._show_overview_page()
+        self._show_page('overview')
 
     def _create_sidebar(self):
         self.sidebar = ctk.CTkFrame(self, width=180, corner_radius=0)
@@ -73,19 +151,10 @@ class App(ctk.CTk):
         )
         logo_label.pack(pady=30)
 
-        self.btn_overview = self._create_sidebar_button('📊 概览', self._show_overview_page)
-        self.btn_transactions = self._create_sidebar_button('📝 交易明细', self._show_transactions_page)
-        self.btn_accounts = self._create_sidebar_button('💳 账户管理', self._show_accounts_page)
-        self.btn_budget = self._create_sidebar_button('🎯 预算管理', self._show_budget_page)
-        self.btn_recurring = self._create_sidebar_button('🔁 周期记账', self._show_recurring_page)
-        self.btn_report = self._create_sidebar_button('📈 报表统计', self._show_report_page)
-
-        self.btn_overview.pack(pady=5, padx=10, fill='x')
-        self.btn_transactions.pack(pady=5, padx=10, fill='x')
-        self.btn_accounts.pack(pady=5, padx=10, fill='x')
-        self.btn_budget.pack(pady=5, padx=10, fill='x')
-        self.btn_recurring.pack(pady=5, padx=10, fill='x')
-        self.btn_report.pack(pady=5, padx=10, fill='x')
+        for key, label in self.PAGE_REGISTRY:
+            btn = self._create_sidebar_button(label, lambda k=key: self._show_page(k))
+            btn.pack(pady=5, padx=10, fill='x')
+            self._buttons[key] = btn
 
     def _create_sidebar_button(self, text, command):
         return ctk.CTkButton(
@@ -100,79 +169,35 @@ class App(ctk.CTk):
             command=command
         )
 
-    def _update_sidebar_active(self, active_btn):
-        for btn in [self.btn_overview, self.btn_transactions, self.btn_accounts,
-                    self.btn_budget, self.btn_recurring, self.btn_report]:
+    def _update_sidebar_active(self, active_key):
+        for key, btn in self._buttons.items():
             btn.configure(fg_color='transparent', text_color=('gray10', 'gray90'))
-        active_btn.configure(fg_color=('#3B8ED0', '#1F6AA5'), text_color='white')
+        if active_key in self._buttons:
+            self._buttons[active_key].configure(fg_color=('#3B8ED0', '#1F6AA5'), text_color='white')
 
     def _create_main_area(self):
         self.main_frame = ctk.CTkFrame(self, corner_radius=0)
         self.main_frame.pack(side='right', fill='both', expand=True)
         self.main_frame.pack_propagate(False)
 
-    def _clear_main_frame(self):
-        for widget in self.main_frame.winfo_children():
-            widget.destroy()
-
-    def _show_overview_page(self):
-        self.current_page = 'overview'
-        self._update_sidebar_active(self.btn_overview)
-        self._clear_main_frame()
-        OverviewPage(self.main_frame, self.ledger, self.budget_manager, self.report_generator)
-
-    def _show_transactions_page(self):
-        self.current_page = 'transactions'
-        self._update_sidebar_active(self.btn_transactions)
-        self._clear_main_frame()
-        TransactionsPage(self.main_frame, self.ledger, self._refresh_all)
-
-    def _show_accounts_page(self):
-        self.current_page = 'accounts'
-        self._update_sidebar_active(self.btn_accounts)
-        self._clear_main_frame()
-        AccountsPage(self.main_frame, self.ledger, self._refresh_all)
-
-    def _show_budget_page(self):
-        self.current_page = 'budget'
-        self._update_sidebar_active(self.btn_budget)
-        self._clear_main_frame()
-        BudgetPage(self.main_frame, self.budget_manager, self.ledger, self._refresh_all)
-
-    def _show_recurring_page(self):
-        self.current_page = 'recurring'
-        self._update_sidebar_active(self.btn_recurring)
-        self._clear_main_frame()
-        RecurringRulesPage(self.main_frame, self.ledger, self._refresh_all)
-
-    def _show_report_page(self):
-        self.current_page = 'report'
-        self._update_sidebar_active(self.btn_report)
-        self._clear_main_frame()
-        ReportPage(self.main_frame, self.report_generator)
+    def _show_page(self, key):
+        self.current_page = key
+        self._update_sidebar_active(key)
+        self.router.show(key, self.main_frame)
 
     def _refresh_all(self):
-        if self.current_page == 'overview':
-            self._show_overview_page()
-        elif self.current_page == 'transactions':
-            self._show_transactions_page()
-        elif self.current_page == 'accounts':
-            self._show_accounts_page()
-        elif self.current_page == 'budget':
-            self._show_budget_page()
-        elif self.current_page == 'recurring':
-            self._show_recurring_page()
-        elif self.current_page == 'report':
-            self._show_report_page()
+        self.router.refresh_all(self.current_page, self.main_frame)
 
     def destroy(self):
         self.ds.close()
         super().destroy()
 
 
-class OverviewPage(ctk.CTkScrollableFrame):
-    def __init__(self, master, ledger, budget_manager, report_generator):
-        super().__init__(master, corner_radius=0)
+class OverviewPage(ctk.CTkScrollableFrame, Page):
+    def __init__(self, master, ledger=None, budget_manager=None, report_generator=None, **kwargs):
+        ctk.CTkScrollableFrame.__init__(self, master, corner_radius=0)
+        Page.__init__(self, master, ledger=ledger, budget_manager=budget_manager,
+                      report_generator=report_generator, **kwargs)
         self.ledger = ledger
         self.budget_manager = budget_manager
         self.report_generator = report_generator
@@ -375,9 +400,10 @@ class OverviewPage(ctk.CTkScrollableFrame):
         separator.pack(fill='x', pady=5)
 
 
-class TransactionsPage(ctk.CTkFrame):
-    def __init__(self, master, ledger, refresh_callback):
-        super().__init__(master, corner_radius=0, fg_color='transparent')
+class TransactionsPage(ctk.CTkFrame, Page):
+    def __init__(self, master, ledger=None, refresh_callback=None, **kwargs):
+        ctk.CTkFrame.__init__(self, master, corner_radius=0, fg_color='transparent')
+        Page.__init__(self, master, ledger=ledger, refresh_callback=refresh_callback, **kwargs)
         self.ledger = ledger
         self.refresh_callback = refresh_callback
         self.pack(fill='both', expand=True)
@@ -926,9 +952,11 @@ class TransactionDialog(ctk.CTkToplevel):
                 self.destroy()
 
 
-class BudgetPage(ctk.CTkScrollableFrame):
-    def __init__(self, master, budget_manager, ledger, refresh_callback):
-        super().__init__(master, corner_radius=0)
+class BudgetPage(ctk.CTkScrollableFrame, Page):
+    def __init__(self, master, budget_manager=None, ledger=None, refresh_callback=None, **kwargs):
+        ctk.CTkScrollableFrame.__init__(self, master, corner_radius=0)
+        Page.__init__(self, master, budget_manager=budget_manager, ledger=ledger,
+                      refresh_callback=refresh_callback, **kwargs)
         self.budget_manager = budget_manager
         self.ledger = ledger
         self.refresh_callback = refresh_callback
@@ -1280,9 +1308,10 @@ class CategoryBudgetSelectDialog(ctk.CTkToplevel):
                          self.on_saved)
 
 
-class ReportPage(ctk.CTkScrollableFrame):
-    def __init__(self, master, report_generator):
-        super().__init__(master, corner_radius=0)
+class ReportPage(ctk.CTkScrollableFrame, Page):
+    def __init__(self, master, report_generator=None, **kwargs):
+        ctk.CTkScrollableFrame.__init__(self, master, corner_radius=0)
+        Page.__init__(self, master, report_generator=report_generator, **kwargs)
         self.report_generator = report_generator
         self.current_month = datetime.now().strftime('%Y-%m')
         self.pack(fill='both', expand=True)
@@ -1449,9 +1478,10 @@ class ReportPage(ctk.CTkScrollableFrame):
         balance_label.pack(side='right', padx=10)
 
 
-class AccountsPage(ctk.CTkScrollableFrame):
-    def __init__(self, master, ledger, refresh_callback):
-        super().__init__(master, corner_radius=0)
+class AccountsPage(ctk.CTkScrollableFrame, Page):
+    def __init__(self, master, ledger=None, refresh_callback=None, **kwargs):
+        ctk.CTkScrollableFrame.__init__(self, master, corner_radius=0)
+        Page.__init__(self, master, ledger=ledger, refresh_callback=refresh_callback, **kwargs)
         self.ledger = ledger
         self.refresh_callback = refresh_callback
         self.pack(fill='both', expand=True)
@@ -1616,9 +1646,10 @@ class AccountDialog(ctk.CTkToplevel):
             messagebox.showerror('错误', str(e))
 
 
-class RecurringRulesPage(ctk.CTkScrollableFrame):
-    def __init__(self, master, ledger, refresh_callback):
-        super().__init__(master, corner_radius=0)
+class RecurringRulesPage(ctk.CTkScrollableFrame, Page):
+    def __init__(self, master, ledger=None, refresh_callback=None, **kwargs):
+        ctk.CTkScrollableFrame.__init__(self, master, corner_radius=0)
+        Page.__init__(self, master, ledger=ledger, refresh_callback=refresh_callback, **kwargs)
         self.ledger = ledger
         self.refresh_callback = refresh_callback
         self.pack(fill='both', expand=True)
