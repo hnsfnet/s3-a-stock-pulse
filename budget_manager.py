@@ -57,55 +57,83 @@ class BudgetManager:
             'status': status
         }
 
+    def _calc_status(self, ratio, budget_amount):
+        if budget_amount == 0:
+            return 'normal'
+        if ratio >= self.DANGER_THRESHOLD:
+            return 'danger'
+        elif ratio >= self.WARNING_THRESHOLD:
+            return 'warning'
+        return 'normal'
+
     def get_category_budget_status(self, year_month):
-        category_expenses = self.ds.get_category_expense_summary(year_month)
-        category_budgets = self.get_category_budgets(year_month)
+        return self.get_category_budget_status_tree(year_month)
+
+    def get_category_budget_status_tree(self, year_month):
+        expense_data = self.ds.get_category_expense_summary(year_month)
+        category_budgets = self.ds.get_budgets(year_month)
+        expense_categories = self.ds.get_categories('expense', parent_only=True)
+        all_subcategories = {}
+        for parent in expense_categories:
+            all_subcategories[parent['id']] = self.ds.get_subcategories(parent['id'])
 
         budget_map = {}
         for b in category_budgets:
             if b['category_id']:
                 budget_map[b['category_id']] = b
 
+        expense_map = {}
+        for exp in expense_data:
+            expense_map[exp['id']] = exp['total']
+
         result = []
-        for exp in category_expenses:
-            budget = budget_map.get(exp['id'])
-            budget_amount = budget['amount'] if budget else 0
+        for parent in expense_categories:
+            pid = parent['id']
+            parent_budget = budget_map.get(pid)
+            parent_budget_amount = parent_budget['amount'] if parent_budget else 0
+            parent_direct_spent = expense_map.get(pid, 0)
 
-            if budget_amount == 0:
-                ratio = 0
-            else:
-                ratio = exp['total'] / budget_amount
+            children_status = []
+            children_total_spent = 0
+            for sub in all_subcategories.get(pid, []):
+                sid = sub['id']
+                sub_budget = budget_map.get(sid)
+                sub_budget_amount = sub_budget['amount'] if sub_budget else 0
+                sub_spent = expense_map.get(sid, 0)
+                children_total_spent += sub_spent
 
-            status = 'normal'
-            if budget_amount > 0:
-                if ratio >= self.DANGER_THRESHOLD:
-                    status = 'danger'
-                elif ratio >= self.WARNING_THRESHOLD:
-                    status = 'warning'
+                sub_ratio = sub_spent / sub_budget_amount if sub_budget_amount > 0 else 0
+                sub_status = self._calc_status(sub_ratio, sub_budget_amount)
+
+                children_status.append({
+                    'category_id': sid,
+                    'category_name': sub['name'],
+                    'category_icon': sub['icon'],
+                    'parent_id': pid,
+                    'budget': sub_budget_amount,
+                    'spent': sub_spent,
+                    'remaining': sub_budget_amount - sub_spent,
+                    'ratio': sub_ratio,
+                    'status': sub_status
+                })
+
+            total_spent = parent_direct_spent + children_total_spent
+            ratio = total_spent / parent_budget_amount if parent_budget_amount > 0 else 0
+            status = self._calc_status(ratio, parent_budget_amount)
 
             result.append({
-                'category_id': exp['id'],
-                'category_name': exp['name'],
-                'category_icon': exp['icon'],
-                'budget': budget_amount,
-                'spent': exp['total'],
-                'remaining': budget_amount - exp['total'],
+                'category_id': pid,
+                'category_name': parent['name'],
+                'category_icon': parent['icon'],
+                'parent_id': None,
+                'budget': parent_budget_amount,
+                'spent': total_spent,
+                'direct_spent': parent_direct_spent,
+                'remaining': parent_budget_amount - total_spent,
                 'ratio': ratio,
-                'status': status
+                'status': status,
+                'children': children_status
             })
-
-        for b in category_budgets:
-            if b['category_id'] and b['category_id'] not in [r['category_id'] for r in result]:
-                result.append({
-                    'category_id': b['category_id'],
-                    'category_name': b['category_name'],
-                    'category_icon': b['category_icon'],
-                    'budget': b['amount'],
-                    'spent': 0,
-                    'remaining': b['amount'],
-                    'ratio': 0,
-                    'status': 'normal'
-                })
 
         return result
 
@@ -119,16 +147,25 @@ class BudgetManager:
                 'message': f'总预算已使用 {total_status["ratio"]*100:.1f}%，已支出 ¥{total_status["spent"]:.2f}'
             })
 
-        category_statuses = self.get_category_budget_status(year_month)
-        for cs in category_statuses:
-            if cs['status'] != 'normal' and cs['budget'] > 0:
+        tree = self.get_category_budget_status_tree(year_month)
+        for parent in tree:
+            if parent['status'] != 'normal' and parent['budget'] > 0:
                 warnings.append({
                     'type': 'category',
-                    'category_id': cs['category_id'],
-                    'category_name': cs['category_name'],
-                    'level': cs['status'],
-                    'message': f'{cs["category_name"]}预算已使用 {cs["ratio"]*100:.1f}%，已支出 ¥{cs["spent"]:.2f}'
+                    'category_id': parent['category_id'],
+                    'category_name': parent['category_name'],
+                    'level': parent['status'],
+                    'message': f'{parent["category_name"]}预算已使用 {parent["ratio"]*100:.1f}%，已支出 ¥{parent["spent"]:.2f}'
                 })
+            for child in parent.get('children', []):
+                if child['status'] != 'normal' and child['budget'] > 0:
+                    warnings.append({
+                        'type': 'subcategory',
+                        'category_id': child['category_id'],
+                        'category_name': f'{parent["category_name"]} > {child["category_name"]}',
+                        'level': child['status'],
+                        'message': f'{parent["category_name"]} > {child["category_name"]}预算已使用 {child["ratio"]*100:.1f}%，已支出 ¥{child["spent"]:.2f}'
+                    })
 
         return warnings
 
